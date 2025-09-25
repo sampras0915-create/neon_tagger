@@ -1,0 +1,27 @@
+name: Build Android APK
+
+on:
+  push:
+    branches: [ "main" ]
+
+jobs:
+  build:
+    runs-on: ubuntu-20.04
+    steps:
+      - uses: actions/checkout@v3
+
+      - name: Install dependencies
+        run: |
+          sudo apt update
+          sudo apt install -y python3-pip openjdk-17-jdk git unzip zip
+          pip install buildozer Cython virtualenv
+
+      - name: Build with Buildozer
+        run: |
+          buildozer android debug
+          
+      - name: Upload APK
+        uses: actions/upload-artifact@v3
+        with:
+          name: neon-tagger-apk
+          path: bin/*.apk
