@@ -1,5 +1,5 @@
 [app]
-title = Neon Tagger
+title = neon_tagger
 package.name = neon_tagger
 package.domain = com.sampras0915
 source.dir = .
@@ -7,7 +7,7 @@ source.include_exts = py,ttf
 include_patterns = *.ttf
 
 version = 0.1.0
-requirements = python3,kivy==2.3.0,pillow
+requirements = python3,kivy,android
 orientation = portrait
 fullscreen = 0
 
