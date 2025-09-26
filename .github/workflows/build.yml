@@ -3,6 +3,7 @@ name: Build Android APK
 on:
   push:
     branches: [ "main" ]
+  workflow_dispatch:
 
 jobs:
   build:
@@ -12,25 +13,27 @@ jobs:
 
       - name: Install dependencies
         run: |
-          sudo apt update
-          sudo apt install -y python3-pip openjdk-17-jdk unzip wget
-          pip install --upgrade pip
+          sudo apt-get update
+          sudo apt-get install -y python3-pip python3-venv openjdk-17-jdk wget unzip
+          python3 -m pip install --upgrade pip
           pip install buildozer Cython virtualenv
 
       - name: Install Android SDK and accept licenses
         env:
           ANDROID_SDK_ROOT: ${{ github.workspace }}/android-sdk
-          ANDROID_HOME: ${{ github.workspace }}/android-sdk
-          PATH: ${{ github.workspace }}/android-sdk/cmdline-tools/bin:${{ github.workspace }}/android-sdk/platform-tools:${{ github.workspace }}/android-sdk/build-tools/36.0.0:$PATH
+          ANDROID_HOME:     ${{ github.workspace }}/android-sdk
+          PATH:             ${{ github.workspace }}/android-sdk/cmdline-tools/latest/bin:${{ github.workspace }}/android-sdk/platform-tools:${{ github.workspace }}/android-sdk/build-tools/36.0.0:${{ env.PATH }}
+        shell: bash
         run: |
           set -eux
-          mkdir -p "$ANDROID_SDK_ROOT/cmdline-tools"
+          mkdir -p "$ANDROID_SDK_ROOT"
           cd "$ANDROID_SDK_ROOT"
-          wget -q https://dl.google.com/android/repository/commandlinetools-linux-11076708_latest.zip -O cmdtools.zip
-          unzip -q cmdtools.zip -d cmdline-tools
-          mv cmdline-tools/cmdline-tools cmdline-tools/latest
-          rm cmdtools.zip
-
+          # cmdline-tools ダウンロード & 展開
+          wget -q https://dl.google.com/android/repository/commandlinetools-linux-11076708_latest.zip -O cmdline-tools.zip
+          unzip -q cmdline-tools.zip -d "$ANDROID_SDK_ROOT"
+          mkdir -p "$ANDROID_SDK_ROOT/cmdline-tools/latest"
+          mv "$ANDROID_SDK_ROOT/cmdline-tools/"* "$ANDROID_SDK_ROOT/cmdline-tools/latest/" || true
+          rm -f cmdline-tools.zip
           yes | "$ANDROID_SDK_ROOT/cmdline-tools/latest/bin/sdkmanager" --licenses
           "$ANDROID_SDK_ROOT/cmdline-tools/latest/bin/sdkmanager" \
             "platform-tools" \
@@ -40,9 +43,10 @@ jobs:
       - name: Build with Buildozer
         env:
           ANDROID_SDK_ROOT: ${{ github.workspace }}/android-sdk
-          ANDROID_HOME: ${{ github.workspace }}/android-sdk
-          PATH: ${{ github.workspace }}/android-sdk/cmdline-tools/latest/bin:${{ github.workspace }}/android-sdk/platform-tools:${{ github.workspace }}/android-sdk/build-tools/36.0.0:$PATH
+          ANDROID_HOME:     ${{ github.workspace }}/android-sdk
+          PATH:             ${{ github.workspace }}/android-sdk/cmdline-tools/latest/bin:${{ github.workspace }}/android-sdk/platform-tools:${{ github.workspace }}/android-sdk/build-tools/36.0.0:${{ env.PATH }}
         run: |
+          set -eux
           buildozer android debug
 
       - name: Upload APK
