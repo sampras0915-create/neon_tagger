@@ -13,89 +13,20 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
 
-      # --- Base packages (Ubuntu 24.04) ---
       - name: Install base packages
         run: |
           set -eux
           sudo apt-get update
           sudo apt-get install -y \
-            python3 python3-pip python3-venv \
-            git unzip zip curl \
-            openjdk-17-jdk \
-            build-essential \
-            zlib1g-dev libffi-dev libssl-dev libncurses6
+            git zip unzip openjdk-17-jdk python3 python3-pip \
+            libffi-dev libssl-dev libsqlite3-dev libjpeg-dev \
+            libfreetype6-dev liblcms2-dev libtiff5-dev
 
-          python3 -m pip install --upgrade pip
-
-      # --- Android SDK cmdline-tools ---
-      - name: Install Android cmdline-tools
+      - name: Install Buildozer & Cython
         run: |
-          set -eux
-          ANDROID_SDK_ROOT="${GITHUB_WORKSPACE}/android-sdk"
-          mkdir -p "${ANDROID_SDK_ROOT}/cmdline-tools/latest"
-          cd /tmp
-          # 安定版の cmdline-tools を取得
-          curl -sSL -o cmdline-tools.zip \
-            https://dl.google.com/android/repository/commandlinetools-linux-11076708_latest.zip
-          unzip -q cmdline-tools.zip -d cmdline-tools
-          mv cmdline-tools/cmdline-tools/* "${ANDROID_SDK_ROOT}/cmdline-tools/latest/"
-          echo "ANDROID_SDK_ROOT=${ANDROID_SDK_ROOT}" >> "$GITHUB_ENV"
-          echo "ANDROID_HOME=${ANDROID_SDK_ROOT}" >> "$GITHUB_ENV"
-          echo "${ANDROID_SDK_ROOT}/platform-tools:${ANDROID_SDK_ROOT}/cmdline-tools/latest/bin" >> $GITHUB_PATH
+          pip3 install --upgrade pip
+          pip3 install buildozer cython
 
-      # --- Android SDK / NDK コンポーネント & ライセンス ---
-      - name: Install Android packages & accept licenses
+      - name: Build APK
         run: |
-          set -eux
-          sdkmanager --version
-          yes | sdkmanager --sdk_root="${ANDROID_SDK_ROOT}" --licenses
-          yes | sdkmanager --sdk_root="${ANDROID_SDK_ROOT}" \
-            "platform-tools" \
-            "platforms;android-33" \
-            "build-tools;33.0.2" \
-            "ndk;26.1.10909125"
-          # Buildozer/p4a が参照する環境値を明示
-          echo "JAVA_HOME=/usr/lib/jvm/java-17-openjdk-amd64" >> "$GITHUB_ENV"
-          echo "ANDROIDSDK=${ANDROID_SDK_ROOT}" >> "$GITHUB_ENV"
-          echo "ANDROIDNDK=${ANDROID_SDK_ROOT}/ndk/26.1.10909125" >> "$GITHUB_ENV"
-          echo "ANDROIDAPI=33" >> "$GITHUB_ENV"
-          echo "NDKAPI=21" >> "$GITHUB_ENV"
-
-      # --- Buildozer / python-for-android ---
-      - name: Install Buildozer & p4a
-        run: |
-          set -eux
-          python3 -m pip install --upgrade \
-            Cython==0.29.36 \
-            buildozer \
-            python-for-android \
-            virtualenv sh
-
-      # --- Buildozer が参照する ENV を再確認（PATH含む）---
-      - name: Configure Buildozer env
-        run: |
-          set -eux
-          echo "${ANDROID_SDK_ROOT}/build-tools/33.0.2:${ANDROID_SDK_ROOT}/platform-tools" >> $GITHUB_PATH
-          echo "${ANDROID_SDK_ROOT}/cmdline-tools/latest/bin:${ANDROID_SDK_ROOT}/tools/bin" >> $GITHUB_PATH
-          # ログ用に表示
-          echo "ANDROIDSDK=$ANDROIDSDK"
-          echo "ANDROIDNDK=$ANDROIDNDK"
-          echo "ANDROIDAPI=$ANDROIDAPI"
-          echo "NDKAPI=$NDKAPI"
-          sdkmanager --list | head -n 50 || true
-
-      # --- 実ビルド（プロジェクト直下に buildozer.spec がある前提なら working-directory を調整）---
-      - name: Build with Buildozer
-  working-directory: .
-  env:
-    P4A_NO_DEPS_CHECK: "1"
-    PYTHONFORANDROID_NO_DEPS_CHECK: "1"
-  run: |
-    set -eux
-    buildozer -v android debug
-
-- name: Upload APK
-  uses: actions/upload-artifact@v4
-  with:
-    name: neon-tagger-apk
-    path: bin/*.apk     # ← ここをbin/*.apkに
+          buildozer -v android debug
