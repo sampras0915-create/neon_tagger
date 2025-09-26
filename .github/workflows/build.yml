@@ -12,7 +12,6 @@ jobs:
     env:
       ANDROID_SDK_ROOT: ${{ github.workspace }}/android-sdk
       ANDROID_HOME:     ${{ github.workspace }}/android-sdk
-      # p4a/Buildozer に SDK/NDK の自動取得をさせない
       P4A_NO_DEPS_CHECK: "1"
       PYTHONFORANDROID_NO_DEPS_CHECK: "1"
 
@@ -33,7 +32,8 @@ jobs:
           sudo apt-get install -y \
             zip unzip git \
             python3 python3-pip python3-setuptools \
-            libffi-dev libssl-dev liblzma-dev
+            libffi-dev libssl-dev liblzma-dev \
+            pkg-config                 # ★ 追加
 
       - name: Install Python deps
         run: |
@@ -41,7 +41,6 @@ jobs:
           python3 -m pip install --upgrade pip wheel
           python3 -m pip install "Cython==0.29.36" buildozer python-for-android virtualenv sh
 
-      # ---- Android cmdline-tools 配置
       - name: Install Android cmdline-tools
         run: |
           set -eux
@@ -52,11 +51,8 @@ jobs:
           unzip -q cmdline-tools.zip
           rm -f cmdline-tools.zip
           mv cmdline-tools latest
-          # ★ 重要：Buildozer が見る legacy パス "tools/..." を
-          #          cmdline-tools/latest へディレクトリごとリンクする
-          ln -sfn "${ANDROID_SDK_ROOT}/cmdline-tools/latest" "${ANDROID_SDK_ROOT}/tools"
+          ln -sfn "${ANDROID_SDK_ROOT}/cmdline-tools/latest" "${ANDROID_SDK_ROOT}/tools"  # ★ ディレクトリごとリンク
 
-      # ---- PATH 追加 & Buildozer 互換リンク
       - name: Link SDK for Buildozer (compat) & PATH
         run: |
           set -eux
@@ -65,7 +61,6 @@ jobs:
           mkdir -p "$HOME/.buildozer/android/platform"
           ln -sfn "${ANDROID_SDK_ROOT}" "$HOME/.buildozer/android/platform/android-sdk"
 
-      # ---- ライセンス同意 & 必須パッケージ導入
       - name: Accept Android licenses & install packages
         run: |
           set -eux
@@ -81,37 +76,32 @@ jobs:
           echo "ANDROIDNDK=${ANDROID_SDK_ROOT}/ndk/25.1.8937393"       >> $GITHUB_ENV
           echo "ANDROIDAPI=33"                                         >> $GITHUB_ENV
           echo "NDKAPI=21"                                             >> $GITHUB_ENV
-          sdkmanager --list | head -n 50 || true
 
-      # ---- デバッグ用に配置確認
       - name: Print Android SDK layout (debug)
         run: |
           set -eux
           which sdkmanager
           ls -la "${ANDROID_SDK_ROOT}"
           ls -la "${ANDROID_SDK_ROOT}/tools/bin" || true
-          [ -x "${ANDROID_SDK_ROOT}/tools/bin/sdkmanager" ] && "${ANDROID_SDK_ROOT}/tools/bin/sdkmanager" --version || true
+          "${ANDROID_SDK_ROOT}/tools/bin/sdkmanager" --version || true
 
-      # ---- APK ビルド
       - name: Build APK
         run: |
           set -eux
-          buildozer -v android debug
+          # ★ 画面とファイルの両方にログを残す
+          buildozer -v android debug 2>&1 | tee buildozer.out.log
 
-      # ---- 失敗時もログだけは拾う
       - name: Upload build logs (always)
         if: always()
         uses: actions/upload-artifact@v4
         with:
           name: build-logs
           path: |
-            .buildozer/android/platform/build-*/dists/*/build.gradle     # 存在すれば
-            ./.buildozer/*/*.log
-            ./buildozer.*.log
-            ./buildozer.log
-          if-no-files-found: ignore
+            buildozer.out.log
+            ./.buildozer/**/*.log          # ★ 1階層/多階層どちらも回収
+            ./.buildozer/**/logs/**         # p4a 側のログ置き場も拾う
+          if-no-files-found: warn
 
-      # ---- APK をアップロード（成功時のみ）
       - name: Upload APK
         if: success()
         uses: actions/upload-artifact@v4
