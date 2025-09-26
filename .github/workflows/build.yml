@@ -1,4 +1,4 @@
-Name: Build Android APK
+name: Build Android APK
 
 on:
   push:
@@ -48,24 +48,15 @@ jobs:
       - name: Install Android cmdline-tools
         run: |
           set -eux
-          mkdir -p "${ANDROID_SDK_ROOT}"
-          cd "${ANDROID_SDK_ROOT}"
+          mkdir -p "${ANDROID_SDK_ROOT}/cmdline-tools"
+          cd "${ANDROID_SDK_ROOT}/cmdline-tools"
           curl -fsSL -o cmdline-tools.zip \
             https://dl.google.com/android/repository/commandlinetools-linux-11076708_latest.zip
           unzip -q cmdline-tools.zip
-          
-          # 【修正箇所】: mvで自己のサブディレクトリへの移動エラーを回避
-          # 展開でできた cmdline-tools を、一時的な名前に変更
-          mv cmdline-tools temp_tools 
-          
-          # 新しい cmdline-tools ディレクトリを作成
-          mkdir -p "${ANDROID_SDK_ROOT}/cmdline-tools"
-          
-          # 一時的なディレクトリを、SDK標準の latest ディレクトリとして移動
-          mv temp_tools "${ANDROID_SDK_ROOT}/cmdline-tools/latest"
-          
           rm -f cmdline-tools.zip
-          echo "ANDROID_SDK_ROOT=${ANDROID_SDK_ROOT}"
+          # 解凍すると "cmdline-tools" フォルダが出るので、それを "latest" にリネーム
+          mv cmdline-tools latest
+          echo "✅ Installed cmdline-tools at ${ANDROID_SDK_ROOT}/cmdline-tools/latest"
 
       # ---- sdkmanager を使えるよう PATH を通し、Buildozer 既定パスにもリンク
       - name: Link SDK for Buildozer (compat)
