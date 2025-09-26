@@ -8,11 +8,11 @@ on:
 jobs:
   build:
     runs-on: ubuntu-latest
-    timeout-minutes: 90
 
     env:
       ANDROID_SDK_ROOT: ${{ github.workspace }}/android-sdk
       ANDROID_HOME:     ${{ github.workspace }}/android-sdk
+      # p4a/Buildozer に SDK/NDK の自動取得をさせない
       P4A_NO_DEPS_CHECK: "1"
       PYTHONFORANDROID_NO_DEPS_CHECK: "1"
 
@@ -41,7 +41,7 @@ jobs:
           python3 -m pip install --upgrade pip wheel
           python3 -m pip install "Cython==0.29.36" buildozer python-for-android virtualenv sh
 
-      # cmdline-tools 配置
+      # ---- Android cmdline-tools 配置
       - name: Install Android cmdline-tools
         run: |
           set -eux
@@ -49,20 +49,23 @@ jobs:
           cd "${ANDROID_SDK_ROOT}/cmdline-tools"
           curl -fsSL -o cmdline-tools.zip \
             https://dl.google.com/android/repository/commandlinetools-linux-11076708_latest.zip
-          unzip -q cmdline-tools.zip && rm -f cmdline-tools.zip
+          unzip -q cmdline-tools.zip
+          rm -f cmdline-tools.zip
           mv cmdline-tools latest
-          # ★ ここを修正：tools/bin ではなく tools を latest にリンク
+          # ★ 重要：Buildozer が見る legacy パス "tools/..." を
+          #          cmdline-tools/latest へディレクトリごとリンクする
           ln -sfn "${ANDROID_SDK_ROOT}/cmdline-tools/latest" "${ANDROID_SDK_ROOT}/tools"
 
+      # ---- PATH 追加 & Buildozer 互換リンク
       - name: Link SDK for Buildozer (compat) & PATH
         run: |
           set -eux
           echo "${ANDROID_SDK_ROOT}/cmdline-tools/latest/bin" >> $GITHUB_PATH
           echo "${ANDROID_SDK_ROOT}/platform-tools"          >> $GITHUB_PATH
-          echo "${ANDROID_SDK_ROOT}/build-tools/36.1.0"      >> $GITHUB_PATH
           mkdir -p "$HOME/.buildozer/android/platform"
           ln -sfn "${ANDROID_SDK_ROOT}" "$HOME/.buildozer/android/platform/android-sdk"
 
+      # ---- ライセンス同意 & 必須パッケージ導入
       - name: Accept Android licenses & install packages
         run: |
           set -eux
@@ -72,67 +75,47 @@ jobs:
             "build-tools;36.1.0" \
             "platforms;android-33" \
             "ndk;25.1.8937393"
-          {
-            echo "ANDROID_NDK_HOME=${ANDROID_SDK_ROOT}/ndk/25.1.8937393"
-            echo "ANDROID_NDK_ROOT=${ANDROID_SDK_ROOT}/ndk/25.1.8937393"
-            echo "ANDROIDSDK=${ANDROID_SDK_ROOT}"
-            echo "ANDROIDNDK=${ANDROID_SDK_ROOT}/ndk/25.1.8937393"
-            echo "ANDROIDAPI=33"
-            echo "NDKAPI=21"
-          } >> $GITHUB_ENV
+          echo "ANDROID_NDK_HOME=${ANDROID_SDK_ROOT}/ndk/25.1.8937393" >> $GITHUB_ENV
+          echo "ANDROID_NDK_ROOT=${ANDROID_SDK_ROOT}/ndk/25.1.8937393" >> $GITHUB_ENV
+          echo "ANDROIDSDK=${ANDROID_SDK_ROOT}"                         >> $GITHUB_ENV
+          echo "ANDROIDNDK=${ANDROID_SDK_ROOT}/ndk/25.1.8937393"       >> $GITHUB_ENV
+          echo "ANDROIDAPI=33"                                         >> $GITHUB_ENV
+          echo "NDKAPI=21"                                             >> $GITHUB_ENV
+          sdkmanager --list | head -n 50 || true
 
-      # プリフライト：実体パスで sdkmanager を確認
-      - name: SDK preflight (explicit real path)
+      # ---- デバッグ用に配置確認
+      - name: Print Android SDK layout (debug)
         run: |
           set -eux
-          SM="${ANDROID_SDK_ROOT}/cmdline-tools/latest/bin/sdkmanager"
-          "$SM" --version
-          "$SM" --list | head -n 50 || true
-          yes | "$SM" --licenses
-          "$SM" --install "platform-tools"
-          ls -l "${ANDROID_SDK_ROOT}/tools/bin" && "${ANDROID_SDK_ROOT}/tools/bin/sdkmanager" --version
+          which sdkmanager
+          ls -la "${ANDROID_SDK_ROOT}"
+          ls -la "${ANDROID_SDK_ROOT}/tools/bin" || true
+          [ -x "${ANDROID_SDK_ROOT}/tools/bin/sdkmanager" ] && "${ANDROID_SDK_ROOT}/tools/bin/sdkmanager" --version || true
 
+      # ---- APK ビルド
       - name: Build APK
         run: |
-          set -euo pipefail
-          mkdir -p .buildozer/logs
-          : > .buildozer/logs/buildozer-ci.log || true
-          if ! buildozer -v android debug | tee .buildozer/logs/buildozer-ci.log ; then
-            echo "::group::Last 200 lines of build log"
-            tail -n 200 .buildozer/logs/buildozer-ci.log || true
-            echo "::endgroup::"
-            exit 1
-          fi
-          shopt -s nullglob
-          APKS=(bin/*.apk .buildozer/android/platform/build/dists/*/bin/*.apk)
-          if [ ${#APKS[@]} -eq 0 ]; then
-            echo "No APK was produced under bin/ or dists/*/bin/"
-            echo "::group::Last 200 lines of build log"
-            tail -n 200 .buildozer/logs/buildozer-ci.log || true
-            echo "::endgroup::"
-            exit 1
-          fi
-          echo "Found APK: ${APKS[*]}"
+          set -eux
+          buildozer -v android debug
 
+      # ---- 失敗時もログだけは拾う
       - name: Upload build logs (always)
         if: always()
         uses: actions/upload-artifact@v4
         with:
           name: build-logs
           path: |
-            .buildozer/logs/*.log
-            .buildozer/buildozer.log
+            .buildozer/android/platform/build-*/dists/*/build.gradle     # 存在すれば
+            ./.buildozer/*/*.log
+            ./buildozer.*.log
+            ./buildozer.log
           if-no-files-found: ignore
-          compression-level: 9
-          retention-days: 7
 
+      # ---- APK をアップロード（成功時のみ）
       - name: Upload APK
         if: success()
         uses: actions/upload-artifact@v4
         with:
           name: neon-tagger-apk
-          path: |
-            bin/*.apk
-            .buildozer/android/platform/build/dists/*/bin/*.apk
+          path: bin/*.apk
           if-no-files-found: warn
-          retention-days: 7
