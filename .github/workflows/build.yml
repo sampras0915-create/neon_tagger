@@ -4,12 +4,6 @@ on:
   push:
     branches: [ "main" ]
   workflow_dispatch:
-    inputs:
-      fresh_setup:
-        description: "Force fresh Android SDK/NDK setup (cache bypass)"
-        type: boolean
-        default: false
-        required: false
 
 jobs:
   build:
@@ -18,9 +12,6 @@ jobs:
     env:
       ANDROID_SDK_ROOT: ${{ github.workspace }}/android-sdk
       ANDROID_HOME:     ${{ github.workspace }}/android-sdk
-      SDK_BUILD_TOOLS:  "34.0.0"           # 安定版に固定
-      SDK_PLATFORM:     "android-33"
-      NDK_VERSION:      "25.1.8937393"     # p4a がデフォで欲しがる r25b
       P4A_NO_DEPS_CHECK: "1"
       PYTHONFORANDROID_NO_DEPS_CHECK: "1"
 
@@ -28,16 +19,17 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
 
-      # ===== Caches（ビルド時間短縮 / 再実行に強い）
-      - name: Restore cache (.buildozer & p4a)
+      # ---- Caches（現状維持）
+      - name: Restore cache (.buildozer / p4a)
         uses: actions/cache@v4
         with:
           path: |
             .buildozer
             ~/.python-for-android
-          key: buildozer-${{ runner.os }}-v3-${{ hashFiles('buildozer.spec', '**/*.py') }}
+          key: ${{ runner.os }}-buildozer-${{ hashFiles('buildozer.spec', '**/*.py', 'requirements*.txt', 'pyproject.toml') }}
           restore-keys: |
-            buildozer-${{ runner.os }}-v3-
+            ${{ runner.os }}-buildozer-
+
       - name: Restore cache (Gradle / Android build cache)
         uses: actions/cache@v4
         with:
@@ -45,20 +37,19 @@ jobs:
             ~/.gradle/caches
             ~/.gradle/wrapper
             ~/.android/build-cache
-          key: gradle-${{ runner.os }}-v1-${{ hashFiles('**/*.gradle*', 'buildozer.spec') }}
+          key: ${{ runner.os }}-gradle-${{ hashFiles('**/*.gradle*', 'gradle.properties', 'buildozer.spec') }}
           restore-keys: |
-            gradle-${{ runner.os }}-v1-
+            ${{ runner.os }}-gradle-
 
-      # ===== OS deps（過去の libffi/autotools 系エラー予防も含む）
+      # ---- OS deps
       - name: Install OS deps
         run: |
           set -eux
           sudo apt-get update
           sudo apt-get install -y \
-            zip unzip git curl \
+            zip unzip git \
             python3 python3-pip python3-setuptools \
-            libffi-dev libssl-dev liblzma-dev \
-            autoconf automake libtool pkg-config
+            libffi-dev libssl-dev liblzma-dev
 
       - name: Set up JDK 17
         uses: actions/setup-java@v4
@@ -66,74 +57,61 @@ jobs:
           distribution: temurin
           java-version: "17"
 
-      # ===== Python / buildozer
+      # ---- Python / buildozer
       - name: Install Python deps
         run: |
           set -eux
           python3 -m pip install --upgrade pip wheel
           python3 -m pip install "Cython==0.29.36" buildozer python-for-android virtualenv sh
 
-      # ===== Android cmdline-tools（tools を latest へディレクトリごとリンク）
+      # ---- Android cmdline-tools
       - name: Install Android cmdline-tools
-        if: ${{ inputs.fresh_setup || steps.cache-sdk.outputs.cache-hit != 'true' }}
         run: |
           set -eux
           mkdir -p "${ANDROID_SDK_ROOT}/cmdline-tools"
           cd "${ANDROID_SDK_ROOT}/cmdline-tools"
           curl -fsSL -o cmdline-tools.zip \
             https://dl.google.com/android/repository/commandlinetools-linux-11076708_latest.zip
-          unzip -q cmdline-tools.zip && rm -f cmdline-tools.zip
+          unzip -q cmdline-tools.zip
+          rm -f cmdline-tools.zip
           mv cmdline-tools latest
-          # ★ 重要：tools/bin ではなく tools -> latest にリンク
-          ln -sfn "${ANDROID_SDK_ROOT}/cmdline-tools/latest" "${ANDROID_SDK_ROOT}/tools"
+          # Buildozer の legacy 期待パス
+          mkdir -p "${ANDROID_SDK_ROOT}/tools"
+          ln -sfn "${ANDROID_SDK_ROOT}/cmdline-tools/latest/bin" "${ANDROID_SDK_ROOT}/tools/bin"
 
-      # ===== PATH と Buildozer の既定パス（.buildozer 配下）にSDKを見せる
       - name: Link SDK for Buildozer (compat) & PATH
         run: |
           set -eux
           echo "${ANDROID_SDK_ROOT}/cmdline-tools/latest/bin" >> $GITHUB_PATH
           echo "${ANDROID_SDK_ROOT}/platform-tools"          >> $GITHUB_PATH
-          echo "${ANDROID_SDK_ROOT}/build-tools/${SDK_BUILD_TOOLS}" >> $GITHUB_PATH
+          echo "${ANDROID_SDK_ROOT}/build-tools/36.1.0"      >> $GITHUB_PATH
           mkdir -p "$HOME/.buildozer/android/platform"
           ln -sfn "${ANDROID_SDK_ROOT}" "$HOME/.buildozer/android/platform/android-sdk"
 
-      # ===== SDK/NDK を明示導入（sdkmanager はフルパスで/事前動作確認）
       - name: Accept Android licenses & install packages
         run: |
           set -eux
-          SDKM="${ANDROID_SDK_ROOT}/cmdline-tools/latest/bin/sdkmanager"
-          "${SDKM}" --version
-          yes | "${SDKM}" --licenses
-          "${SDKM}" --install \
+          yes | sdkmanager --licenses
+          sdkmanager --install \
             "platform-tools" \
-            "build-tools;${SDK_BUILD_TOOLS}" \
-            "platforms;${SDK_PLATFORM}" \
-            "ndk;${NDK_VERSION}"
-          # Buildozer/p4a が読む環境変数を明示
-          {
-            echo "ANDROIDSDK=${ANDROID_SDK_ROOT}"
-            echo "ANDROIDNDK=${ANDROID_SDK_ROOT}/ndk/${NDK_VERSION}"
-            echo "ANDROIDAPI=${SDK_PLATFORM#android-}"
-            echo "NDKAPI=21"
-            echo "ANDROID_NDK_HOME=${ANDROID_SDK_ROOT}/ndk/${NDK_VERSION}"
-            echo "ANDROID_NDK_ROOT=${ANDROID_SDK_ROOT}/ndk/${NDK_VERSION}"
-          } >> "$GITHUB_ENV"
+            "build-tools;36.1.0" \
+            "platforms;android-33" \
+            "ndk;25.1.8937393"
+          echo "ANDROID_NDK_HOME=${ANDROID_SDK_ROOT}/ndk/25.1.8937393" >> $GITHUB_ENV
+          echo "ANDROID_NDK_ROOT=${ANDROID_SDK_ROOT}/ndk/25.1.8937393" >> $GITHUB_ENV
+          echo "ANDROIDSDK=${ANDROID_SDK_ROOT}"                         >> $GITHUB_ENV
+          echo "ANDROIDNDK=${ANDROID_SDK_ROOT}/ndk/25.1.8937393"       >> $GITHUB_ENV
+          echo "ANDROIDAPI=33"                                         >> $GITHUB_ENV
+          echo "NDKAPI=21"                                             >> $GITHUB_ENV
 
-      # ===== デバッグ短縮出力（sdkmanager クラスパス崩れの早期検知）
-      - name: SDK preflight
-        run: |
-          set -eux
-          "${ANDROID_SDK_ROOT}/tools/bin/sdkmanager" --version
-          ls -la "${ANDROID_SDK_ROOT}/tools/lib" || true
-          ls -la "${ANDROID_SDK_ROOT}/build-tools/${SDK_BUILD_TOOLS}" || true
-
-      # ===== Build（標準出力を必ずログへも保存）
+      # ---- Build（逐次フラッシュでログ欠落防止）
       - name: Build APK
         run: |
           set -eux
-          ( buildozer -v android debug ) 2>&1 | tee buildozer.console.log
+          # 出力のバッファリングを無効化して必ずファイルへ残す
+          stdbuf -oL -eL buildozer -v android debug 2>&1 | tee buildozer.console.log
 
-      # ===== APK（p4aの出力場所を広めに拾う）
+      # ---- APK（あるなら拾う）
       - name: Upload APK
         if: always()
         uses: actions/upload-artifact@v4
@@ -142,11 +120,10 @@ jobs:
           path: |
             bin/*.apk
             .buildozer/android/platform/**/dists/*/bin/*.apk
-            .buildozer/android/platform/**/dists/*/*.apk
           if-no-files-found: warn
           retention-days: 14
 
-      # ===== ログ（常に保存、後追い解析しやすいよう広めに）
+      # ---- ログを常にアップロード（解析用）
       - name: Upload build logs (always)
         if: always()
         uses: actions/upload-artifact@v4
@@ -158,5 +135,6 @@ jobs:
             ./.buildozer/**/buildozer.log
             ./.buildozer/android/platform/**/dists/*/build/*.log
             ./.buildozer/android/platform/**/dists/*/build-*.txt
+            ~/.gradle/daemon/*/daemon-*.log
           if-no-files-found: warn
           retention-days: 14
