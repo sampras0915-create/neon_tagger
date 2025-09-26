@@ -2,7 +2,7 @@ name: Build Android APK
 
 on:
   push:
-    branches: ["main"]
+    branches: [ "main" ]
   workflow_dispatch:
 
 jobs:
@@ -12,7 +12,6 @@ jobs:
     env:
       ANDROID_SDK_ROOT: ${{ github.workspace }}/android-sdk
       ANDROID_HOME:     ${{ github.workspace }}/android-sdk
-      # p4a / Buildozer の自動DLを抑止（手動で入れる）
       P4A_NO_DEPS_CHECK: "1"
       PYTHONFORANDROID_NO_DEPS_CHECK: "1"
 
@@ -26,7 +25,6 @@ jobs:
           distribution: temurin
           java-version: "17"
 
-      # --- OS deps
       - name: Install OS deps
         run: |
           set -eux
@@ -36,15 +34,12 @@ jobs:
             python3 python3-pip python3-setuptools \
             libffi-dev libssl-dev liblzma-dev
 
-      # --- Python / Buildozer
       - name: Install Python deps
         run: |
           set -eux
           python3 -m pip install --upgrade pip wheel
-          # p4aとの相性から Cython は固定推奨
           python3 -m pip install "Cython==0.29.36" buildozer python-for-android virtualenv sh
 
-      # --- cmdline-tools 配置（＋ legacy tools/bin 互換リンク）
       - name: Install Android cmdline-tools
         run: |
           set -eux
@@ -55,21 +50,19 @@ jobs:
           unzip -q cmdline-tools.zip
           rm -f cmdline-tools.zip
           mv cmdline-tools latest
-          # Buildozer が探すレガシーパスのためのリンク
+          # Buildozer が期待する legacy パスも用意
           mkdir -p "${ANDROID_SDK_ROOT}/tools"
           ln -sfn "${ANDROID_SDK_ROOT}/cmdline-tools/latest/bin" "${ANDROID_SDK_ROOT}/tools/bin"
 
-      # --- PATH 追加 & Buildozer 互換リンク
       - name: Link SDK for Buildozer (compat) & PATH
         run: |
           set -eux
           echo "${ANDROID_SDK_ROOT}/cmdline-tools/latest/bin" >> $GITHUB_PATH
           echo "${ANDROID_SDK_ROOT}/platform-tools"          >> $GITHUB_PATH
-
+          echo "${ANDROID_SDK_ROOT}/build-tools/36.1.0"      >> $GITHUB_PATH
           mkdir -p "$HOME/.buildozer/android/platform"
           ln -sfn "${ANDROID_SDK_ROOT}" "$HOME/.buildozer/android/platform/android-sdk"
 
-      # --- ライセンス同意 & 必須パッケージ導入
       - name: Accept Android licenses & install packages
         run: |
           set -eux
@@ -79,8 +72,6 @@ jobs:
             "build-tools;36.1.0" \
             "platforms;android-33" \
             "ndk;25.1.8937393"
-
-          # NDK / SDK を環境に公開（Buildozer が再DLしないように）
           echo "ANDROID_NDK_HOME=${ANDROID_SDK_ROOT}/ndk/25.1.8937393" >> $GITHUB_ENV
           echo "ANDROID_NDK_ROOT=${ANDROID_SDK_ROOT}/ndk/25.1.8937393" >> $GITHUB_ENV
           echo "ANDROIDSDK=${ANDROID_SDK_ROOT}"                         >> $GITHUB_ENV
@@ -88,36 +79,48 @@ jobs:
           echo "ANDROIDAPI=33"                                         >> $GITHUB_ENV
           echo "NDKAPI=21"                                             >> $GITHUB_ENV
 
-      # --- レイアウト確認（ログ強化）
-      - name: Print Android SDK layout (debug)
-        run: |
-          set -eux
-          which sdkmanager
-          sdkmanager --version || true
-          ls -la "${ANDROID_SDK_ROOT}"
-          ls -la "${ANDROID_SDK_ROOT}/build-tools" || true
-          ls -la "${ANDROID_SDK_ROOT}/build-tools/36.1.0" || true
-          ls -l "$HOME/.buildozer/android/platform/android-sdk/tools/bin" || true
-
-      # --- APK ビルド（どこに出たか必ずログ出力）
       - name: Build APK
         run: |
           set -eux
-          buildozer -v android debug
-          echo "== repo root =="
-          ls -R .
-          echo "== bin dir (if any) =="
-          ls -R bin || true
-          echo "== .buildozer dists bins (if any) =="
-          ls -R .buildozer/android/platform/build-* || true
+          # 失敗時に備えてログ出力を強化
+          echo "=== ENV ==="; env | sort | sed 's/^\(GH_TOKEN\|GITHUB_TOKEN\)=.*/\1=***hidden***/' || true
+          buildozer -v android debug || { echo "Buildozer returned non-zero."; exit 1; }
 
-      # --- 生成物アップロード（bin と dists 両方をカバー）
+      # --- ここから診断用のログ収集（失敗しても必ず実行）
+      - name: Collect build logs
+        if: always()
+        run: |
+          set -eux
+          mkdir -p build-logs
+          # Buildozer / p4a の代表的なログ・設定を回収
+          cp -rf .buildozer build-logs/.buildozer || true
+          cp -rf ~/.buildozer build-logs/home-buildozer || true
+          # よく見るログ位置を明示
+          find build-logs -maxdepth 4 -type f -name "*.log" -o -name "buildozer.spec" || true
+
+      - name: Upload logs
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: build-logs
+          path: build-logs
+
+      # --- APK の回収（見つからない場合は警告で理由を表示）
       - name: Upload APK
+        if: always()
+        run: |
+          set -eux
+          shopt -s nullglob
+          files=(bin/*.apk)
+          if [ ${#files[@]} -eq 0 ]; then
+            echo "::warning title=No APK::bin/*.apk が見つかりません。上の『build-logs』アーティファクト内の *.log を確認してください。"
+            exit 0
+          fi
+        shell: bash
+
+      - name: Upload APK artifact
         if: success()
         uses: actions/upload-artifact@v4
         with:
           name: neon-tagger-apk
-          path: |
-            bin/*.apk
-            .buildozer/android/platform/build-*/dists/*/bin/*.apk
-          if-no-files-found: warn
+          path: bin/*.apk
