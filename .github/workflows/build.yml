@@ -1,129 +1,42 @@
-name: Build Android APK
+# SDKを毎回クリーンに
+- name: Clean old SDK
+  run: |
+    set -eux
+    rm -rf "${ANDROID_SDK_ROOT}"
+    mkdir -p "${ANDROID_SDK_ROOT}"
 
-on:
-  push:
-    branches: [ "main" ]
-  workflow_dispatch:
+# cmdline-tools 配備（tools を latest へ“丸ごと”リンク）
+- name: Install Android cmdline-tools
+  run: |
+    set -eux
+    mkdir -p "${ANDROID_SDK_ROOT}/cmdline-tools"
+    cd "${ANDROID_SDK_ROOT}/cmdline-tools"
+    curl -fsSL -o cmdline-tools.zip \
+      https://dl.google.com/android/repository/commandlinetools-linux-11076708_latest.zip
+    unzip -q cmdline-tools.zip && rm -f cmdline-tools.zip
+    mv cmdline-tools latest
+    # ★ ここが肝：tools/bin ではなく tools -> latest にリンク（lib も参照できる）
+    ln -sfn "${ANDROID_SDK_ROOT}/cmdline-tools/latest" "${ANDROID_SDK_ROOT}/tools"
 
-jobs:
-  build:
-    runs-on: ubuntu-latest
+# Buildozer が必ずこのSDKを見るように強制リンク
+- name: Link SDK for Buildozer (compat) & PATH
+  run: |
+    set -eux
+    echo "${ANDROID_SDK_ROOT}/cmdline-tools/latest/bin" >> $GITHUB_PATH
+    echo "${ANDROID_SDK_ROOT}/platform-tools"          >> $GITHUB_PATH
+    mkdir -p "$HOME/.buildozer/android/platform"
+    # ★ 壊れた自前SDKを消す → 今回のSDKへリンク
+    rm -rf  "$HOME/.buildozer/android/platform/android-sdk"
+    ln -sfn "${ANDROID_SDK_ROOT}" "$HOME/.buildozer/android/platform/android-sdk"
 
-    env:
-      ANDROID_SDK_ROOT: ${{ github.workspace }}/android-sdk
-      ANDROID_HOME:     ${{ github.workspace }}/android-sdk
-      P4A_NO_DEPS_CHECK: "1"
-      PYTHONFORANDROID_NO_DEPS_CHECK: "1"
-
-    steps:
-      - name: Checkout
-        uses: actions/checkout@v4
-
-      # ---------- Caches（SDKは除外）
-      - name: Restore cache (.buildozer / p4a)
-        uses: actions/cache@v4
-        with:
-          path: |
-            .buildozer
-            ~/.python-for-android
-          key: ${{ runner.os }}-buildozer-${{ hashFiles('buildozer.spec', '**/*.py') }}
-          restore-keys: |
-            ${{ runner.os }}-buildozer-
-
-      # ---------- Clean SDK（毎回リフレッシュ）
-      - name: Clean old SDK
-        run: |
-          rm -rf "${ANDROID_SDK_ROOT}"
-          mkdir -p "${ANDROID_SDK_ROOT}"
-
-      # ---------- OS deps
-      - name: Install OS deps
-        run: |
-          set -eux
-          sudo apt-get update
-          sudo apt-get install -y \
-            zip unzip git \
-            python3 python3-pip python3-setuptools \
-            libffi-dev libssl-dev liblzma-dev
-
-      - name: Set up JDK 17
-        uses: actions/setup-java@v4
-        with:
-          distribution: temurin
-          java-version: "17"
-
-      # ---------- Python / buildozer
-      - name: Install Python deps
-        run: |
-          set -eux
-          python3 -m pip install --upgrade pip wheel
-          python3 -m pip install "Cython==0.29.36" buildozer python-for-android virtualenv sh
-
-      # ---------- Android cmdline-tools
-      - name: Install Android cmdline-tools
-        run: |
-          set -eux
-          mkdir -p "${ANDROID_SDK_ROOT}/cmdline-tools"
-          cd "${ANDROID_SDK_ROOT}/cmdline-tools"
-          curl -fsSL -o cmdline-tools.zip \
-            https://dl.google.com/android/repository/commandlinetools-linux-11076708_latest.zip
-          unzip -q cmdline-tools.zip
-          rm -f cmdline-tools.zip
-          mv cmdline-tools latest
-          # 互換リンクを強制作成
-          mkdir -p "${ANDROID_SDK_ROOT}/tools"
-          ln -sfn "${ANDROID_SDK_ROOT}/cmdline-tools/latest/bin" "${ANDROID_SDK_ROOT}/tools/bin"
-
-      - name: Link SDK for Buildozer (compat) & PATH
-        run: |
-          set -eux
-          echo "${ANDROID_SDK_ROOT}/cmdline-tools/latest/bin" >> $GITHUB_PATH
-          echo "${ANDROID_SDK_ROOT}/platform-tools"          >> $GITHUB_PATH
-          echo "${ANDROID_SDK_ROOT}/build-tools/36.1.0"      >> $GITHUB_PATH
-          mkdir -p "$HOME/.buildozer/android/platform"
-          ln -sfn "${ANDROID_SDK_ROOT}" "$HOME/.buildozer/android/platform/android-sdk"
-
-      - name: Accept Android licenses & install packages
-        run: |
-          set -eux
-          yes | sdkmanager --licenses
-          sdkmanager --install \
-            "platform-tools" \
-            "build-tools;36.1.0" \
-            "platforms;android-33" \
-            "ndk;25.1.8937393"
-          echo "ANDROID_NDK_HOME=${ANDROID_SDK_ROOT}/ndk/25.1.8937393" >> $GITHUB_ENV
-          echo "ANDROID_NDK_ROOT=${ANDROID_SDK_ROOT}/ndk/25.1.8937393" >> $GITHUB_ENV
-          echo "ANDROIDSDK=${ANDROID_SDK_ROOT}"                         >> $GITHUB_ENV
-          echo "ANDROIDNDK=${ANDROID_SDK_ROOT}/ndk/25.1.8937393"       >> $GITHUB_ENV
-          echo "ANDROIDAPI=33"                                         >> $GITHUB_ENV
-          echo "NDKAPI=21"                                             >> $GITHUB_ENV
-
-      # ---------- Build
-      - name: Build APK
-        run: |
-          set -eux
-          stdbuf -oL -eL buildozer -v android debug 2>&1 | tee buildozer.console.log
-
-      # ---------- Upload artifacts
-      - name: Upload APK
-        if: always()
-        uses: actions/upload-artifact@v4
-        with:
-          name: apk
-          path: |
-            bin/*.apk
-            .buildozer/android/platform/**/dists/*/bin/*.apk
-          if-no-files-found: warn
-
-      - name: Upload build logs (always)
-        if: always()
-        uses: actions/upload-artifact@v4
-        with:
-          name: build-logs
-          path: |
-            buildozer.console.log
-            ./.buildozer/buildozer.log
-            ./.buildozer/android/platform/**/dists/*/build/*.log
-            ./.buildozer/android/platform/**/dists/*/build-*.txt
-          if-no-files-found: warn
+# sdkmanager の健全性チェック → パッケージ導入
+- name: Accept Android licenses & install packages
+  run: |
+    set -eux
+    "${ANDROID_SDK_ROOT}/cmdline-tools/latest/bin/sdkmanager" --version
+    yes | "${ANDROID_SDK_ROOT}/cmdline-tools/latest/bin/sdkmanager" --licenses
+    "${ANDROID_SDK_ROOT}/cmdline-tools/latest/bin/sdkmanager" --install \
+      "platform-tools" \
+      "build-tools;36.1.0" \
+      "platforms;android-33" \
+      "ndk;25.1.8937393"
