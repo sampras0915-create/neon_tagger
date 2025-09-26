@@ -12,6 +12,11 @@ orientation = portrait
 fullscreen = 0
 
 [buildozer]
+env.CFLAGS = -I/data/data/com.termux/files/usr/include
+env.LDFLAGS = -L/data/data/com.termux/files/usr/lib
+env.PYTHONFORANDROID_NO_DEPS_CHECK = 1
+env.P4A_SKIP_DEPS_CHECK = 1
+env.P4A_NO_DEPS_CHECK = 1
 log_level = 2
 warn_on_root = 0
 
