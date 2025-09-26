@@ -12,6 +12,7 @@ jobs:
     env:
       ANDROID_SDK_ROOT: ${{ github.workspace }}/android-sdk
       ANDROID_HOME:     ${{ github.workspace }}/android-sdk
+      # p4a/Buildozer に SDK/NDK の自動ダウンロードをさせない
       P4A_NO_DEPS_CHECK: "1"
       PYTHONFORANDROID_NO_DEPS_CHECK: "1"
 
@@ -51,6 +52,7 @@ jobs:
           unzip -q cmdline-tools.zip
           rm -f cmdline-tools.zip
           mv cmdline-tools latest
+          # Buildozer の legacy 期待パスを満たすリンク
           mkdir -p "${ANDROID_SDK_ROOT}/tools"
           ln -sfn "${ANDROID_SDK_ROOT}/cmdline-tools/latest/bin" "${ANDROID_SDK_ROOT}/tools/bin"
 
@@ -72,6 +74,7 @@ jobs:
             "build-tools;36.1.0" \
             "platforms;android-33" \
             "ndk;25.1.8937393"
+          # NDK パスを環境へ公開（p4a が再DLしないように）
           echo "ANDROID_NDK_HOME=${ANDROID_SDK_ROOT}/ndk/25.1.8937393" >> $GITHUB_ENV
           echo "ANDROID_NDK_ROOT=${ANDROID_SDK_ROOT}/ndk/25.1.8937393" >> $GITHUB_ENV
           echo "ANDROIDSDK=${ANDROID_SDK_ROOT}"                         >> $GITHUB_ENV
@@ -84,7 +87,19 @@ jobs:
           set -eux
           buildozer -v android debug
 
-      # ---- ログは常にアップロード（軽量）
+      # ---- APK を広めのパスから拾う（bin/ と dists/*/bin/ の両方）
+      - name: Upload APK
+        if: always()  # 失敗時でも残っていれば拾えるように
+        uses: actions/upload-artifact@v4
+        with:
+          name: apk
+          path: |
+            bin/*.apk
+            .buildozer/android/platform/build-*/dists/*/bin/*.apk
+            .buildozer/android/platform/build-*/dists/*/*.apk
+          if-no-files-found: warn
+
+      # ---- 最後の 200 行ログを保存（常に）
       - name: Upload build logs (always)
         if: always()
         uses: actions/upload-artifact@v4
@@ -93,17 +108,5 @@ jobs:
           path: |
             ./.buildozer/*.log
             ./.buildozer/**/buildozer.log
-            ./.buildozer/android/platform/build-*/dists/*/build.gradle
-            ./buildozer.*.log
-          if-no-files-found: warn
-
-      # ---- APK の検出範囲を広げる（ここが今回の最小修正）
-      - name: Upload APK
-        if: success()
-        uses: actions/upload-artifact@v4
-        with:
-          name: apk
-          path: |
-            bin/*.apk
-            .buildozer/android/platform/build-*/dists/*/bin/*.apk
+            ./.buildozer/android/platform/build-*/dists/*/buildozer.log
           if-no-files-found: warn
