@@ -19,7 +19,6 @@ jobs:
           distribution: temurin
           java-version: "17"
 
-      # ---- OS 依存パッケージ
       - name: Install OS deps
         run: |
           set -eux
@@ -29,7 +28,6 @@ jobs:
             python3 python3-pip python3-setuptools \
             libffi-dev libssl-dev liblzma-dev libncurses6
 
-      # ---- Python / buildozer
       - name: Install Python deps
         run: |
           set -eux
@@ -40,18 +38,17 @@ jobs:
             python-for-android \
             virtualenv sh
 
-      # ---- Android cmdline-tools + SDK
       - name: Install Android cmdline-tools
         env:
           ANDROID_SDK_ROOT: ${{ github.workspace }}/android-sdk
         run: |
           set -eux
           mkdir -p "${ANDROID_SDK_ROOT}/cmdline-tools"
-          cd "${ANDROID_SDK_ROOT}"
+          cd "${ANDROID_SDK_ROOT}/cmdline-tools"
           curl -fsSL -o cmdline-tools.zip \
             https://dl.google.com/android/repository/commandlinetools-linux-11076708_latest.zip
-          unzip -q cmdline-tools.zip
-          mv cmdline-tools cmdline-tools/latest
+          unzip -q cmdline-tools.zip -d .
+          mv cmdline-tools latest
           echo "ANDROID_SDK_ROOT=${ANDROID_SDK_ROOT}" >> "$GITHUB_ENV"
           echo "${ANDROID_SDK_ROOT}/cmdline-tools/latest/bin" >> "$GITHUB_PATH"
           echo "${ANDROID_SDK_ROOT}/platform-tools" >> "$GITHUB_PATH"
@@ -67,22 +64,17 @@ jobs:
             "platforms;android-34" \
             "build-tools;36.1.0"
 
-      # ---- Buildozer 用のENV（ログにも出す）
       - name: Configure Buildozer env
         env:
           ANDROID_SDK_ROOT: ${{ github.workspace }}/android-sdk
         run: |
           set -eux
           echo "ANDROIDSDK=${ANDROID_SDK_ROOT}" >> "$GITHUB_ENV"
-          echo "ANDROIDNDK=${ANDROID_SDK_ROOT}/ndk" >> "$GITHUB_ENV"   # (ndk未使用でもOK)
+          echo "ANDROIDNDK=${ANDROID_SDK_ROOT}/ndk" >> "$GITHUB_ENV"
           echo "ANDROIDAPI=34" >> "$GITHUB_ENV"
           echo "NDKAPI=23" >> "$GITHUB_ENV"
-          echo "ANDROIDSDK=$ANDROID_SDK_ROOT"
-          echo "ANDROIDAPI=$ANDROIDAPI"
-          echo "NDKAPI=$NDKAPI"
           sdkmanager --list | head -n 50 || true
 
-      # ---- 実ビルド（リポジトリ直下に buildozer.spec がある想定）
       - name: Build APK
         env:
           P4A_NO_DEPS_CHECK: "1"
@@ -91,7 +83,6 @@ jobs:
           set -eux
           buildozer -v android debug
 
-      # ---- 生成 APK を成果物にアップロード
       - name: Upload APK
         uses: actions/upload-artifact@v4
         with:
