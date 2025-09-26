@@ -1,0 +1,3 @@
+
+# allow Buildozer spec for CI
+!buildozer.spec
