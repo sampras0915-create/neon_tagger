@@ -86,17 +86,16 @@ jobs:
 
       # --- 実ビルド（プロジェクト直下に buildozer.spec がある前提なら working-directory を調整）---
       - name: Build with Buildozer
-        working-directory: neon_tagger
-        env:
-          P4A_NO_DEPS_CHECK: "1"
-          PYTHONFORANDROID_NO_DEPS_CHECK: "1"
-        run: |
-          set -eux
-          buildozer -v android debug
+  working-directory: .
+  env:
+    P4A_NO_DEPS_CHECK: "1"
+    PYTHONFORANDROID_NO_DEPS_CHECK: "1"
+  run: |
+    set -eux
+    buildozer -v android debug
 
-      # --- 生成 APK を成果物にアップロード ---
-      - name: Upload APK
-        uses: actions/upload-artifact@v4
-        with:
-          name: neon-tagger-apk
-          path: neon_tagger/bin/*.apk
+- name: Upload APK
+  uses: actions/upload-artifact@v4
+  with:
+    name: neon-tagger-apk
+    path: bin/*.apk     # ← ここをbin/*.apkに
