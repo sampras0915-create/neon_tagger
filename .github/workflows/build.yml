@@ -12,6 +12,7 @@ jobs:
     env:
       ANDROID_SDK_ROOT: ${{ github.workspace }}/android-sdk
       ANDROID_HOME:     ${{ github.workspace }}/android-sdk
+      # p4a/Buildozer に SDK/NDK の自動ダウンロードをさせない
       P4A_NO_DEPS_CHECK: "1"
       PYTHONFORANDROID_NO_DEPS_CHECK: "1"
 
@@ -19,12 +20,28 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
 
+      # ---- Cache (先にキーを確定させてヒット率を上げる)
+      - name: Cache Android SDK
+        uses: actions/cache@v4
+        with:
+          path: ${{ github.workspace }}/android-sdk
+          key: sdk-${{ runner.os }}-v2
+
+      - name: Cache .buildozer (recipes等)
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.buildozer
+            ./.buildozer
+          key: buildozer-${{ runner.os }}-${{ hashFiles('buildozer.spec') }}
+
       - name: Set up JDK 17
         uses: actions/setup-java@v4
         with:
           distribution: temurin
           java-version: "17"
 
+      # ---- OS 依存パッケージ（libffi 失敗の根本対策：autotools 一式を追加）
       - name: Install OS deps
         run: |
           set -eux
@@ -33,37 +50,47 @@ jobs:
             zip unzip git \
             python3 python3-pip python3-setuptools \
             libffi-dev libssl-dev liblzma-dev \
-            pkg-config                 # ★ 追加
+            autoconf automake libtool pkg-config
 
+      # ---- Python / Buildozer
       - name: Install Python deps
         run: |
           set -eux
           python3 -m pip install --upgrade pip wheel
+          # p4a との相性で Cython を固定推奨
           python3 -m pip install "Cython==0.29.36" buildozer python-for-android virtualenv sh
 
+      # ---- Android cmdline-tools 配置（Buildozer の legacy パスも満たす）
       - name: Install Android cmdline-tools
         run: |
           set -eux
           mkdir -p "${ANDROID_SDK_ROOT}/cmdline-tools"
-          cd "${ANDROID_SDK_ROOT}/cmdline-tools"
-          curl -fsSL -o cmdline-tools.zip \
-            https://dl.google.com/android/repository/commandlinetools-linux-11076708_latest.zip
-          unzip -q cmdline-tools.zip
-          rm -f cmdline-tools.zip
-          mv cmdline-tools latest
-          ln -sfn "${ANDROID_SDK_ROOT}/cmdline-tools/latest" "${ANDROID_SDK_ROOT}/tools"  # ★ ディレクトリごとリンク
+          if [ ! -x "${ANDROID_SDK_ROOT}/cmdline-tools/latest/bin/sdkmanager" ]; then
+            cd "${ANDROID_SDK_ROOT}/cmdline-tools"
+            curl -fsSL -o cmdline-tools.zip \
+              https://dl.google.com/android/repository/commandlinetools-linux-11076708_latest.zip
+            unzip -q cmdline-tools.zip
+            rm -f cmdline-tools.zip
+            mv cmdline-tools latest
+          fi
+          # legacy パス tools/bin を用意
+          mkdir -p "${ANDROID_SDK_ROOT}/tools"
+          ln -sfn "${ANDROID_SDK_ROOT}/cmdline-tools/latest/bin" "${ANDROID_SDK_ROOT}/tools/bin"
 
-      - name: Link SDK for Buildozer (compat) & PATH
+      - name: Link SDK for Buildozer & PATH
         run: |
           set -eux
           echo "${ANDROID_SDK_ROOT}/cmdline-tools/latest/bin" >> $GITHUB_PATH
           echo "${ANDROID_SDK_ROOT}/platform-tools"          >> $GITHUB_PATH
+          echo "${ANDROID_SDK_ROOT}/build-tools/36.1.0"      >> $GITHUB_PATH
           mkdir -p "$HOME/.buildozer/android/platform"
           ln -sfn "${ANDROID_SDK_ROOT}" "$HOME/.buildozer/android/platform/android-sdk"
 
-      - name: Accept Android licenses & install packages
+      # ---- ライセンス同意 & 必須パッケージ導入（build-tools 36.1 / API 33 / NDK r25b）
+      - name: SDK preflight (force list/install under explicit sdkmanager path)
         run: |
           set -eux
+          sdkmanager --version || true
           yes | sdkmanager --licenses
           sdkmanager --install \
             "platform-tools" \
@@ -72,25 +99,29 @@ jobs:
             "ndk;25.1.8937393"
           echo "ANDROID_NDK_HOME=${ANDROID_SDK_ROOT}/ndk/25.1.8937393" >> $GITHUB_ENV
           echo "ANDROID_NDK_ROOT=${ANDROID_SDK_ROOT}/ndk/25.1.8937393" >> $GITHUB_ENV
-          echo "ANDROIDSDK=${ANDROID_SDK_ROOT}"                         >> $GITHUB_ENV
-          echo "ANDROIDNDK=${ANDROID_SDK_ROOT}/ndk/25.1.8937393"       >> $GITHUB_ENV
-          echo "ANDROIDAPI=33"                                         >> $GITHUB_ENV
-          echo "NDKAPI=21"                                             >> $GITHUB_ENV
-
-      - name: Print Android SDK layout (debug)
-        run: |
-          set -eux
+          echo "ANDROIDSDK=${ANDROID_SDK_ROOT}"                       >> $GITHUB_ENV
+          echo "ANDROIDNDK=${ANDROID_SDK_ROOT}/ndk/25.1.8937393"     >> $GITHUB_ENV
+          echo "ANDROIDAPI=33"                                        >> $GITHUB_ENV
+          echo "NDKAPI=21"                                            >> $GITHUB_ENV
+          ls -la "${ANDROID_SDK_ROOT}" || true
+          ls -la "${ANDROID_SDK_ROOT}/build-tools/36.1.0" || true
           which sdkmanager
-          ls -la "${ANDROID_SDK_ROOT}"
-          ls -la "${ANDROID_SDK_ROOT}/tools/bin" || true
-          "${ANDROID_SDK_ROOT}/tools/bin/sdkmanager" --version || true
 
+      # ---- Build（標準出力をログにも保存）
       - name: Build APK
         run: |
           set -eux
-          # ★ 画面とファイルの両方にログを残す
           buildozer -v android debug 2>&1 | tee buildozer.out.log
 
+      # ---- 生成物
+      - name: Upload APK
+        if: success()
+        uses: actions/upload-artifact@v4
+        with:
+          name: neon-tagger-apk
+          path: bin/*.apk
+
+      # ---- 失敗してもログは必ず残す
       - name: Upload build logs (always)
         if: always()
         uses: actions/upload-artifact@v4
@@ -98,14 +129,6 @@ jobs:
           name: build-logs
           path: |
             buildozer.out.log
-            ./.buildozer/**/*.log          # ★ 1階層/多階層どちらも回収
-            ./.buildozer/**/logs/**         # p4a 側のログ置き場も拾う
-          if-no-files-found: warn
-
-      - name: Upload APK
-        if: success()
-        uses: actions/upload-artifact@v4
-        with:
-          name: neon-tagger-apk
-          path: bin/*.apk
+            ./.buildozer/**/*.log
+            ./.buildozer/android/platform/build-*/dists/*/build.gradle
           if-no-files-found: warn
