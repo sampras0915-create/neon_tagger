@@ -41,7 +41,7 @@ jobs:
           python3 -m pip install --upgrade pip wheel
           python3 -m pip install "Cython==0.29.36" buildozer python-for-android virtualenv sh
 
-      # --- cmdline-tools 配置（＋ legacy tools/bin 互換リンク）
+      # cmdline-tools 配置
       - name: Install Android cmdline-tools
         run: |
           set -eux
@@ -51,8 +51,8 @@ jobs:
             https://dl.google.com/android/repository/commandlinetools-linux-11076708_latest.zip
           unzip -q cmdline-tools.zip && rm -f cmdline-tools.zip
           mv cmdline-tools latest
-          mkdir -p "${ANDROID_SDK_ROOT}/tools"
-          ln -sfn "${ANDROID_SDK_ROOT}/cmdline-tools/latest/bin" "${ANDROID_SDK_ROOT}/tools/bin"
+          # ★ ここを修正：tools/bin ではなく tools を latest にリンク
+          ln -sfn "${ANDROID_SDK_ROOT}/cmdline-tools/latest" "${ANDROID_SDK_ROOT}/tools"
 
       - name: Link SDK for Buildozer (compat) & PATH
         run: |
@@ -81,17 +81,16 @@ jobs:
             echo "NDKAPI=21"
           } >> $GITHUB_ENV
 
-      # --- ここが“プリフライト”（sdkmanager の健全性を先に保証）
-      - name: SDK preflight (force list/install under explicit sdk_root)
+      # プリフライト：実体パスで sdkmanager を確認
+      - name: SDK preflight (explicit real path)
         run: |
           set -eux
-          sdkmanager --version
-          sdkmanager --sdk_root="${ANDROID_SDK_ROOT}" --list | head -n 50 || true
-          yes | sdkmanager --sdk_root="${ANDROID_SDK_ROOT}" --licenses
-          sdkmanager --sdk_root="${ANDROID_SDK_ROOT}" --install "platform-tools"
-          # Buildozer が参照するパス側にも tools/bin があることを再確認
-          ls -l "$HOME/.buildozer/android/platform/android-sdk/tools/bin" || true
-          "$HOME/.buildozer/android/platform/android-sdk/tools/bin/sdkmanager" --version
+          SM="${ANDROID_SDK_ROOT}/cmdline-tools/latest/bin/sdkmanager"
+          "$SM" --version
+          "$SM" --list | head -n 50 || true
+          yes | "$SM" --licenses
+          "$SM" --install "platform-tools"
+          ls -l "${ANDROID_SDK_ROOT}/tools/bin" && "${ANDROID_SDK_ROOT}/tools/bin/sdkmanager" --version
 
       - name: Build APK
         run: |
@@ -115,7 +114,6 @@ jobs:
           fi
           echo "Found APK: ${APKS[*]}"
 
-      # --- ログは常に軽量保存
       - name: Upload build logs (always)
         if: always()
         uses: actions/upload-artifact@v4
@@ -128,7 +126,6 @@ jobs:
           compression-level: 9
           retention-days: 7
 
-      # --- APK は成功時のみ保存（bin/ と dists/ 両方を拾う）
       - name: Upload APK
         if: success()
         uses: actions/upload-artifact@v4
