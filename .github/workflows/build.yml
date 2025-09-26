@@ -3,101 +3,94 @@ name: Build Android APK
 on:
   push:
     branches: [ "main" ]
-  workflow_dispatch:
+  workflow_dispatch:  # ← 手動実行ボタン
 
 jobs:
   build:
     runs-on: ubuntu-latest
 
-    # ← ここに env を置くのが正解
     env:
       ANDROID_SDK_ROOT: ${{ github.workspace }}/android-sdk
       ANDROID_HOME: ${{ github.workspace }}/android-sdk
-      JAVA_HOME: /usr/lib/jvm/java-17-openjdk-amd64
-      # p4a の依存チェックをスキップ（CIで止まらないように）
+      JAVA_HOME: /usr/lib/jvm/temurin-17-jdk-amd64
       P4A_NO_DEPS_CHECK: "1"
       PYTHONFORANDROID_NO_DEPS_CHECK: "1"
-      # sdkmanager や build-tools を PATH に追加
-      PATH: ${{ github.workspace }}/android-sdk/cmdline-tools/latest/bin:${{ github.workspace }}/android-sdk/platform-tools:${{ env.PATH }}
 
     steps:
       - uses: actions/checkout@v4
 
-      # 1) 必要なパッケージ
-      - name: Install system packages
+      # 1) 必要パッケージ
+      - name: Install base packages
         shell: bash
         run: |
-          set -eux
+          set -euxo pipefail
           sudo apt-get update
           sudo apt-get install -y \
-            python3-pip python3-venv \
-            git unzip wget \
-            openjdk-17-jdk-headless \
-            zlib1g-dev libffi-dev libssl-dev
+            python3 python3-pip python3-venv git unzip zip curl \
+            openjdk-17-jdk build-essential libz-dev libffi-dev libssl-dev libncurses5
+          python3 -m pip install --upgrade pip wheel setuptools
 
-          python3 -m pip install --upgrade pip
-
-      # 2) Android SDK（cmdline-tools）を配置してライセンス同意
-      - name: Install Android SDK cmdline-tools & accept licenses
+      # 2) Android SDK(cmdline-tools) を配置
+      - name: Install Android cmdline-tools
         shell: bash
         run: |
-          set -eux
-          mkdir -p "$ANDROID_SDK_ROOT"
-          cd "$ANDROID_SDK_ROOT"
+          set -euxo pipefail
+          mkdir -p "$ANDROID_SDK_ROOT/cmdline-tools"
+          cd "$ANDROID_SDK_ROOT/cmdline-tools"
+          curl -sSL https://dl.google.com/android/repository/commandlinetools-linux-11076708_latest.zip -o cmdline-tools.zip
+          unzip -q cmdline-tools.zip
+          rm -f cmdline-tools.zip
+          # 展開物は cmdline-tools/ 配下に入るので latest へ移動
+          mv cmdline-tools latest || true
+          echo "$ANDROID_SDK_ROOT/cmdline-tools/latest/bin" >> "$GITHUB_PATH"
+          echo "$ANDROID_SDK_ROOT/platform-tools" >> "$GITHUB_PATH"
+          echo "SDKMANAGER=$ANDROID_SDK_ROOT/cmdline-tools/latest/bin/sdkmanager" >> "$GITHUB_ENV"
 
-          # cmdline-tools を取得
-          tmpzip=/tmp/cmdline-tools.zip
-          wget -q -O "$tmpzip" https://dl.google.com/android/repository/commandlinetools-linux-11076708_latest.zip
-          mkdir -p cmdline-tools
-          unzip -q "$tmpzip" -d cmdline-tools
-          # 期待ディレクトリ構造: cmdline-tools/latest/...
-          if [ -d cmdline-tools/cmdline-tools ]; then
-            mv cmdline-tools/cmdline-tools cmdline-tools/latest
-          elif [ ! -d cmdline-tools/latest ]; then
-            # unzip 結果が異なる場合の保険
-            mv cmdline-tools/* cmdline-tools/latest || true
-          fi
-
-          yes | sdkmanager --sdk_root="$ANDROID_SDK_ROOT" --licenses
-
-      # 3) 必要な Android プラットフォーム類
-      - name: Install Android platforms & build-tools
+      # 3) SDK/NDK とライセンス承認（安定版に固定）
+      - name: Install Android packages & accept licenses
         shell: bash
         run: |
-          set -eux
-          sdkmanager --sdk_root="$ANDROID_SDK_ROOT" \
+          set -euxo pipefail
+          source "$GITHUB_ENV"
+          yes | "$SDKMANAGER" --sdk_root="$ANDROID_SDK_ROOT" --licenses > /dev/null || true
+          "$SDKMANAGER" --sdk_root="$ANDROID_SDK_ROOT" \
             "platform-tools" \
             "platforms;android-33" \
-            "build-tools;36.1.0" \
+            "build-tools;35.0.0" \
             "ndk;26.3.11579264"
 
-      # 4) Buildozer / p4a
+      # 4) Buildozer / python-for-android を導入
       - name: Install Buildozer & p4a
         shell: bash
         run: |
-          set -eux
-          python3 -m pip install --upgrade buildozer Cython virtualenv
+          set -euxo pipefail
+          python3 -m pip install --upgrade "Cython<3" buildozer "python-for-android<2025.0"
+          # user-base/bin を PATH に追加（buildozer 実体）
+          echo "$(python3 -m site --user-base)/bin" >> "$GITHUB_PATH"
+          buildozer --version
+          git --version
 
-      # 5) ビルド（詳細ログ）
+      # 5) Buildozer が参照する環境値を明示
+      - name: Configure Buildozer env
+        shell: bash
+        run: |
+          set -eux
+          echo "ANDROIDSDK=$ANDROID_SDK_ROOT" >> "$GITHUB_ENV"
+          echo "ANDROIDNDK=$ANDROID_SDK_ROOT/ndk/26.3.11579264" >> "$GITHUB_ENV"
+          echo "ANDROIDAPI=33" >> "$GITHUB_ENV"
+          echo "NDKAPI=21" >> "$GITHUB_ENV"
+
+      # 6) ビルド
       - name: Build with Buildozer
         shell: bash
         env:
-          # 念のため step 単位でも可視化
-          ANDROIDSDK: ${{ env.ANDROID_SDK_ROOT }}
-          ANDROIDNDK: ${{ env.ANDROID_SDK_ROOT }}/ndk/26.3.11579264
-          ANDROIDAPI: "33"
-          NDKAPI: "21"
+          P4A_NO_DEPS_CHECK: "1"
+          PYTHONFORANDROID_NO_DEPS_CHECK: "1"
         run: |
-          set -eux
-          echo "ANDROIDSDK=$ANDROIDSDK"
-          echo "ANDROIDNDK=$ANDROIDNDK"
-          echo "ANDROIDAPI=$ANDROIDAPI"
-          echo "NDKAPI=$NDKAPI"
-
-          # ビルド
+          set -euxo pipefail
           buildozer -v android debug
 
-      # 6) 生成APKを成果物としてアップロード
+      # 7) 生成APKを成果物にアップロード
       - name: Upload APK
         uses: actions/upload-artifact@v4
         with:
