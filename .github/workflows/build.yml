@@ -64,6 +64,18 @@ jobs:
             "platforms;android-34" \
             "build-tools;36.1.0"
 
+      # ★ ここを追加：Buildozer が参照する場所に SDK をリンク
+      - name: Link SDK for Buildozer
+        env:
+          ANDROID_SDK_ROOT: ${{ github.workspace }}/android-sdk
+        run: |
+          set -eux
+          mkdir -p "${HOME}/.buildozer/android/platform"
+          rm -rf "${HOME}/.buildozer/android/platform/android-sdk" || true
+          ln -s "${ANDROID_SDK_ROOT}" "${HOME}/.buildozer/android/platform/android-sdk"
+          # aidl があるかチェック（無ければ失敗させて原因を早期に出す）
+          test -x "${HOME}/.buildozer/android/platform/android-sdk/build-tools/36.1.0/aidl"
+
       - name: Configure Buildozer env
         env:
           ANDROID_SDK_ROOT: ${{ github.workspace }}/android-sdk
