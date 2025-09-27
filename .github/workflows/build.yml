@@ -1,4 +1,4 @@
-name: Build Android APK (clean, 6h)
+name: Build Android APK (clean, 6h, ffi-fix)
 
 on:
   push:
@@ -20,7 +20,7 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
 
-      # ---- 徹底クリーン（毎回まっさら）
+      # ---- 完全クリーン
       - name: Hard clean previous Android env
         run: |
           set -eux
@@ -28,7 +28,7 @@ jobs:
           rm -rf "$HOME/.buildozer" || true
           rm -rf "$HOME/.python-for-android" || true
 
-      # ---- OS 依存パッケージ（libffi autoreconf 対策を強化）
+      # ---- OS 依存パッケージ（libffi/autotools 対策を含む）
       - name: Install OS deps
         run: |
           set -eux
@@ -40,13 +40,24 @@ jobs:
             autoconf automake libtool libtool-bin pkg-config \
             gettext gperf m4 gawk
 
-      # ---- Autotools 検索パスを明示（グローバル）
+      # ---- Autotools 検索パスをグローバルに
       - name: Export autotools env
         run: |
           set -eux
           {
             echo "ACLOCAL_PATH=/usr/share/aclocal"
             echo "LIBTOOLIZE=libtoolize"
+          } >> "$GITHUB_ENV"
+
+      # ---- libffi のヘッダー/ライブラリ探索を確実に（CFLAGS/LDFLAGS）
+      - name: Export compile flags for libffi
+        run: |
+          set -eux
+          CFLAGS="-I/usr/include -I/usr/include/x86_64-linux-gnu"
+          LDFLAGS="-L/usr/lib/x86_64-linux-gnu"
+          {
+            echo "CFLAGS=${CFLAGS}"
+            echo "LDFLAGS=${LDFLAGS}"
           } >> "$GITHUB_ENV"
 
       # ---- JDK
@@ -76,7 +87,7 @@ jobs:
           # tools ディレクトリ“ごと” latest へリンク（ClassNotFound対策）
           ln -sfn "${ANDROID_SDK_ROOT}/cmdline-tools/latest" "${ANDROID_SDK_ROOT}/tools"
 
-      # ---- Buildozer が必ずこの SDK を使うように再リンク
+      # ---- Buildozer が必ずこの SDK を使うように再リンク＋PATH
       - name: Link SDK for Buildozer (compat) & PATH
         run: |
           set -eux
@@ -107,16 +118,20 @@ jobs:
             echo "NDKAPI=21"
           } >> "$GITHUB_ENV"
 
-      # ---- ビルド（逐次フラッシュ＋aclocal パスを“直前”に強制）
+      # ---- ビルド（逐次フラッシュ＋aclocal/CFLAGS/LDFLAGS を直前にも export）
       - name: Build APK
         run: |
           set -eux
-          # autotools を子プロセスにも確実に伝える
-          export ACLOCAL_PATH="/usr/share/aclocal"
-          export ACLOCAL="aclocal -I /usr/share/aclocal"
-          export LIBTOOLIZE="libtoolize"
+          # autotools/ffi を子プロセスにも確実に伝える
+          export ACLOCAL_PATH="${ACLOCAL_PATH:-/usr/share/aclocal}"
+          export ACLOCAL="aclocal -I ${ACLOCAL_PATH}"
+          export LIBTOOLIZE="${LIBTOOLIZE:-libtoolize}"
+          export CFLAGS="${CFLAGS:-} -I/usr/include -I/usr/include/x86_64-linux-gnu"
+          export LDFLAGS="${LDFLAGS:-} -L/usr/lib/x86_64-linux-gnu"
           which libtoolize; libtoolize --version || true
           which aclocal;    aclocal --print-ac-dir || true
+          echo "CFLAGS=${CFLAGS}"
+          echo "LDFLAGS=${LDFLAGS}"
 
           # ログ途切れ防止・逐次表示
           stdbuf -oL -eL buildozer -v android debug 2>&1 | tee buildozer.console.log
