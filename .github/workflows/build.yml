@@ -1,4 +1,4 @@
-name: Build Android APK (clean)
+name: Build Android APK (clean, 6h)
 
 on:
   push:
@@ -8,6 +8,7 @@ on:
 jobs:
   build:
     runs-on: ubuntu-latest
+    timeout-minutes: 360  # 6時間まで実行を許可
 
     env:
       ANDROID_SDK_ROOT: ${{ github.workspace }}/android-sdk
@@ -19,7 +20,7 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
 
-      # ---- 徹底クリーン（SDK/NDK/Buildozer/p4aの残骸を削除）
+      # ---- 徹底クリーン（毎回まっさら）
       - name: Hard clean previous Android env
         run: |
           set -eux
@@ -27,7 +28,7 @@ jobs:
           rm -rf "$HOME/.buildozer" || true
           rm -rf "$HOME/.python-for-android" || true
 
-      # ---- OS 依存パッケージ（libffi の autoreconf 対策を強化）
+      # ---- OS 依存パッケージ（libffi autoreconf 対策を強化）
       - name: Install OS deps
         run: |
           set -eux
@@ -39,7 +40,7 @@ jobs:
             autoconf automake libtool libtool-bin pkg-config \
             gettext gperf m4 gawk
 
-      # ---- Autotools 検索パスを明示
+      # ---- Autotools 検索パスを明示（グローバル）
       - name: Export autotools env
         run: |
           set -eux
@@ -72,7 +73,7 @@ jobs:
             https://dl.google.com/android/repository/commandlinetools-linux-11076708_latest.zip
           unzip -q cmdline-tools.zip && rm -f cmdline-tools.zip
           mv cmdline-tools latest
-          # ★ tools ディレクトリ“ごと” latest へリンク（ClassNotFound 対策）
+          # tools ディレクトリ“ごと” latest へリンク（ClassNotFound対策）
           ln -sfn "${ANDROID_SDK_ROOT}/cmdline-tools/latest" "${ANDROID_SDK_ROOT}/tools"
 
       # ---- Buildozer が必ずこの SDK を使うように再リンク
@@ -106,10 +107,18 @@ jobs:
             echo "NDKAPI=21"
           } >> "$GITHUB_ENV"
 
-      # ---- ビルド（逐次フラッシュでログ欠落防止）
+      # ---- ビルド（逐次フラッシュ＋aclocal パスを“直前”に強制）
       - name: Build APK
         run: |
           set -eux
+          # autotools を子プロセスにも確実に伝える
+          export ACLOCAL_PATH="/usr/share/aclocal"
+          export ACLOCAL="aclocal -I /usr/share/aclocal"
+          export LIBTOOLIZE="libtoolize"
+          which libtoolize; libtoolize --version || true
+          which aclocal;    aclocal --print-ac-dir || true
+
+          # ログ途切れ防止・逐次表示
           stdbuf -oL -eL buildozer -v android debug 2>&1 | tee buildozer.console.log
 
       # ---- 生成物を広めに回収
